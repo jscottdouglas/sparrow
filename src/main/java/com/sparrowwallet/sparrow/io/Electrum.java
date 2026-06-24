@@ -188,6 +188,27 @@ public class Electrum implements KeystoreFileImport, WalletImport, WalletExport 
 
                 keystore.setKeyDerivation(new KeyDerivation(masterFingerprint, derivationPath, true));
                 keystore.setExtendedPublicKey(xPub);
+                //Import the MWEB view keys (scan secret + spend public key) from an Electrum-LTC MWEB keystore.
+                //These are stored as hex on the keystore and are required for the imported wallet to scan MWEB outputs.
+                if(ek.mweb_scan_secret != null) {
+                    keystore.setMwebScanPrivateKey(ECKey.fromPrivate(Utils.hexToBytes(ek.mweb_scan_secret)));
+                }
+                if(ek.mweb_spend_pubkey != null) {
+                    keystore.setMwebSpendPublicKey(ECKey.fromPublicOnly(Utils.hexToBytes(ek.mweb_spend_pubkey)));
+                }
+                //Every Sparrow-LTC software keystore is expected to carry MWEB keys (signing always routes through the
+                //MWEB server). The Electrum file only provides them for MWEB wallets, so for any other seed-based wallet
+                //derive them from the seed at <derivation>/0' (scan) and <derivation>/1' (spend), matching how Sparrow-LTC
+                //derives them for natively created wallets. Without this, signing an imported wallet fails with a null scan key.
+                if(keystore.getMwebScanPrivateKey() == null && keystore.getSeed() != null) {
+                    ExtendedKey masterPrivateKey = keystore.getExtendedMasterPrivateKey();
+                    List<ChildNumber> scanDerivation = new ArrayList<>(KeyDerivation.parsePath(derivationPath));
+                    scanDerivation.add(new ChildNumber(0, true));
+                    keystore.setMwebScanPrivateKey(masterPrivateKey.getKey(scanDerivation));
+                    List<ChildNumber> spendDerivation = new ArrayList<>(KeyDerivation.parsePath(derivationPath));
+                    spendDerivation.add(new ChildNumber(1, true));
+                    keystore.setMwebSpendPublicKey(masterPrivateKey.getKey(spendDerivation).dropPrivateBytes().dropParent());
+                }
                 keystore.setLabel(ek.label != null ? ek.label : "Electrum");
                 if(keystore.getLabel().length() > Keystore.MAX_LABEL_LENGTH) {
                     keystore.setLabel(keystore.getLabel().substring(0, Keystore.MAX_LABEL_LENGTH));
@@ -477,6 +498,9 @@ public class Electrum implements KeystoreFileImport, WalletImport, WalletExport 
         public String seed;
         public String passphrase;
         public Integer pw_hash_version;
+        //MWEB view keys present on an Electrum-LTC MWEB keystore (hex-encoded scan secret and spend public key)
+        public String mweb_scan_secret;
+        public String mweb_spend_pubkey;
     }
 
     public static class ElectrumAddresses {

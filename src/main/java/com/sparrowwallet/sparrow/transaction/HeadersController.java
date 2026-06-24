@@ -1146,12 +1146,18 @@ public class HeadersController extends TransactionFormController implements Init
             if(!silentPayments.isEmpty()) {
                 EventManager.get().post(new TransactionOutputsChangedEvent(headersForm.getTransaction()));
             }
-            var psbt = MwebServer.get().psbtSign(headersForm.getPsbt(), unencryptedWallet.getKeystores().getFirst());
-            if(psbt.isFinalized()) {
-                headersForm.getTransactionData().setPsbt(psbt);
-            } else {
-                headersForm.getPsbt().combine(psbt);
-                headersForm.getPsbt().setTransactionForSigning(MwebServer.get().psbtExtract(headersForm.getPsbt(), null));
+            //Only route through the MWEB server when the keystore actually holds an MWEB scan key. A keystore without
+            //one (e.g. an older imported wallet) cannot have MWEB inputs to sign, so MWEB signing is skipped and the
+            //transaction is signed normally - this avoids a null scan key crashing the sign.
+            Keystore signingKeystore = unencryptedWallet.getKeystores().getFirst();
+            if(signingKeystore.getMwebScanPrivateKey() != null) {
+                var psbt = MwebServer.get().psbtSign(headersForm.getPsbt(), signingKeystore);
+                if(psbt.isFinalized()) {
+                    headersForm.getTransactionData().setPsbt(psbt);
+                } else {
+                    headersForm.getPsbt().combine(psbt);
+                    headersForm.getPsbt().setTransactionForSigning(MwebServer.get().psbtExtract(headersForm.getPsbt(), null));
+                }
             }
             unencryptedWallet.sign(signingNodes);
             updateSignedKeystores(headersForm.getSigningWallet());

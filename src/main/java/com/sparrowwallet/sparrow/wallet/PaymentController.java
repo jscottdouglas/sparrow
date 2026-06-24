@@ -2,6 +2,13 @@ package com.sparrowwallet.sparrow.wallet;
 
 import com.google.common.base.Throwables;
 import com.google.common.eventbus.Subscribe;
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.DecodeHintType;
+import com.google.zxing.LuminanceSource;
+import com.google.zxing.NotFoundException;
+import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
+import com.google.zxing.common.HybridBinarizer;
+import com.google.zxing.qrcode.QRCodeReader;
 import com.sparrowwallet.drongo.BitcoinUnit;
 import com.sparrowwallet.drongo.KeyPurpose;
 import com.sparrowwallet.drongo.address.Address;
@@ -50,6 +57,8 @@ import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.Dragboard;
+import javafx.scene.input.TransferMode;
 import javafx.scene.layout.HBox;
 import org.controlsfx.glyphfont.Glyph;
 import org.controlsfx.validation.ValidationResult;
@@ -60,6 +69,9 @@ import org.girod.javafx.svgimage.SVGLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.awt.image.BufferedImage;
+import java.io.File;
+import javax.imageio.ImageIO;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
@@ -388,6 +400,37 @@ public class PaymentController extends WalletFormController implements Initializ
         address.textProperty().addListener(addressListener);
         address.setContextMenu(address.getCustomContextMenu(Collections.emptyList()));
         address.setSkin(new AddressTextFieldSkin(address));
+
+        //Allow a QR code image file to be dropped onto the Pay to field, as an alternative to scanning with the camera
+        address.setOnDragOver(event -> {
+            if(event.getGestureSource() != address && event.getDragboard().hasFiles()) {
+                event.acceptTransferModes(TransferMode.ANY);
+            }
+            event.consume();
+        });
+        address.setOnDragDropped(event -> {
+            address.getStyleClass().remove("drag-over");
+            Dragboard db = event.getDragboard();
+            boolean success = false;
+            if(db.hasFiles() && !db.getFiles().isEmpty()) {
+                setPayToFromQRImage(db.getFiles().get(0));
+                success = true;
+            }
+            //Consume so the dropped file is not also handled by the application-wide file open handler
+            event.setDropCompleted(success);
+            event.consume();
+        });
+        //Highlight the field while a file is dragged over it, to indicate it is a valid drop target for a QR image
+        address.setOnDragEntered(event -> {
+            if(event.getGestureSource() != address && event.getDragboard().hasFiles() && !address.getStyleClass().contains("drag-over")) {
+                address.getStyleClass().add("drag-over");
+            }
+            event.consume();
+        });
+        address.setOnDragExited(event -> {
+            address.getStyleClass().remove("drag-over");
+            event.consume();
+        });
 
         label.textProperty().addListener((observable, oldValue, newValue) -> {
             maxButton.setDisable(!isMaxButtonEnabled());
@@ -806,6 +849,32 @@ public class PaymentController extends WalletFormController implements Initializ
             AppServices.addPayjoinURI(bitcoinURI);
         }
         sendController.updateTransaction();
+    }
+
+    private void setPayToFromQRImage(File file) {
+        try {
+            BufferedImage bufferedImage = ImageIO.read(file);
+            if(bufferedImage == null) {
+                showErrorDialog("Invalid image", "Could not read an image from the dropped file. Drop an image (PNG, JPG etc.) containing a QR code.");
+                return;
+            }
+
+            LuminanceSource source = new BufferedImageLuminanceSource(bufferedImage);
+            BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(source));
+            String qrtext = new QRCodeReader().decode(bitmap, Map.of(DecodeHintType.TRY_HARDER, Boolean.TRUE)).getText();
+
+            try {
+                updateFromURI(new BitcoinURI(qrtext));
+            } catch(Exception e) {
+                //Not a BIP21 URI - treat the decoded text as a plain address (the field validates it)
+                address.setText(qrtext);
+            }
+        } catch(NotFoundException e) {
+            showErrorDialog("No QR code found", "No QR code could be detected in the dropped image.");
+        } catch(Exception e) {
+            log.error("Error reading QR code from dropped image", e);
+            showErrorDialog("Error reading QR code", e.getMessage() == null ? e.toString() : e.getMessage());
+        }
     }
 
     private List<Address> getOtherAddresses() {

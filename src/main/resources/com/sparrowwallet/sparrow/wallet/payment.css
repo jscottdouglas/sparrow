@@ -1,3 +1,11 @@
 #address .paynym-icon {
     -fx-padding: 0 0 0 5;
 }
+
+/* Highlight the Pay to field while a QR code image is dragged over it */
+.address-text-field.drag-over {
+    -fx-border-color: -fx-focus-color;
+    -fx-border-width: 2;
+    -fx-border-style: dashed;
+    -fx-border-radius: 4;
+}
