@@ -968,7 +968,9 @@ public class HeadersController extends TransactionFormController implements Init
     public void openInBlockExplorer(ActionEvent event) {
         openBlockExplorer.setSelected(false);
         String txid = headersForm.getTransaction().calculateTxId(false).toString();
-        AppServices.openBlockExplorer(txid);
+        //Confidential MWEB transactions go to the MWEB explorer; the tx detail view has no block height handy, so the
+        //MWEB explorer's hash search page is opened (the transaction-list right-click deep-links to the exact block).
+        AppServices.openBlockExplorer(txid, headersForm.getTransaction().isMweb(), 0);
     }
 
     public void setLocktimeToCurrentHeight(ActionEvent event) {
@@ -1243,6 +1245,15 @@ public class HeadersController extends TransactionFormController implements Init
             AppServices.showErrorDialog("Invalid Silent Payments Transaction", e.getMessage());
             viewFinalButton.setDisable(false);
             return false;
+        } catch(Exception e) {
+            //MWEB peg-in/peg-out transactions are extracted through the MWEB server, which can fail (e.g.
+            //"PSBT cannot be extracted as it is incomplete"). Previously this gRPC exception propagated uncaught out of
+            //broadcastTransaction, leaving the broadcast silently dead with the button stuck disabled. Surface it and
+            //re-enable so the failure is visible and recoverable instead of looking like nothing happened.
+            log.error("Failed to extract transaction", e);
+            AppServices.showErrorDialog("Unable to Extract Transaction", e.getMessage() == null ? e.toString() : e.getMessage());
+            viewFinalButton.setDisable(false);
+            return false;
         }
     }
 
@@ -1278,7 +1289,12 @@ public class HeadersController extends TransactionFormController implements Init
 
         ElectrumServer.BroadcastTransactionService broadcastTransactionService = new ElectrumServer.BroadcastTransactionService(headersForm.getTransaction(), fee.getValue());
         broadcastTransactionService.setOnSucceeded(workerStateEvent -> {
-            if(headersForm.getWallet().getScriptType() == ScriptType.MWEB) {
+            //Show the broadcast transaction as pending (0-conf) immediately. This already covered transactions sent from
+            //the MWEB wallet (peg-outs and pure MWEB sends); extend it to ANY MWEB transaction so a peg-in (Move to
+            //Private, which is sent from the public wallet whose scriptType != MWEB) also appears unconfirmed at once.
+            //Otherwise the peg-in fell through to mempool polling that searches by the MWEB id the server does not index,
+            //so it never surfaced and looked like the broadcast had not gone through.
+            if(headersForm.getWallet().getScriptType() == ScriptType.MWEB || headersForm.getTransaction().isMweb()) {
                 var tx = headersForm.txdata.getSavedTransaction();
                 var txn = new BlockTransaction(tx.getTxId(), 0, null, fee.getValue(), tx, null, headersForm.getName());
                 headersForm.getWallet().updateTransactions(Map.of(txn.getHash(), txn));
