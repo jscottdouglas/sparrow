@@ -7,14 +7,21 @@ import com.google.zxing.client.j2se.MatrixToImageConfig;
 import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.qrcode.QRCodeWriter;
+import com.sparrowwallet.drongo.BitcoinUnit;
 import com.sparrowwallet.drongo.KeyPurpose;
 import com.sparrowwallet.drongo.OutputDescriptor;
+import com.sparrowwallet.drongo.protocol.Transaction;
+import com.sparrowwallet.drongo.uri.BitcoinURI;
 import com.sparrowwallet.drongo.wallet.BlockTransactionHashIndex;
 import com.sparrowwallet.drongo.wallet.Keystore;
 import com.sparrowwallet.drongo.wallet.KeystoreSource;
 import com.sparrowwallet.drongo.wallet.Wallet;
 import com.sparrowwallet.sparrow.AppServices;
+import com.sparrowwallet.sparrow.CurrencyRate;
 import com.sparrowwallet.sparrow.EventManager;
+import com.sparrowwallet.sparrow.UnitFormat;
+import com.sparrowwallet.sparrow.io.Config;
+import com.sparrowwallet.sparrow.net.ExchangeSource;
 import com.sparrowwallet.sparrow.control.*;
 import com.sparrowwallet.sparrow.event.*;
 import com.sparrowwallet.sparrow.glyphfont.FontAwesome5;
@@ -33,10 +40,15 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URL;
 import java.text.DateFormat;
+import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class ReceiveController extends WalletFormController implements Initializable {
@@ -68,6 +80,21 @@ public class ReceiveController extends WalletFormController implements Initializ
     @FXML
     private Button displayAddress;
 
+    @FXML
+    private TextField amount;
+
+    @FXML
+    private ComboBox<BitcoinUnit> amountUnit;
+
+    @FXML
+    private TextField fiatAmount;
+
+    @FXML
+    private Label fiatCurrencyCode;
+
+    //Guards against the LTC<->fiat amount listeners re-triggering each other while one updates the other
+    private boolean syncingAmounts;
+
     private NodeEntry currentEntry;
 
     private QRDisplayDialog addressQrDialog;
@@ -87,14 +114,76 @@ public class ReceiveController extends WalletFormController implements Initializ
 
         qrCode.setOnMouseClicked(event -> {
             if(currentEntry != null && addressQrDialog == null) {
-                addressQrDialog = new QRDisplayDialog(currentEntry.getAddress().toString());
+                addressQrDialog = new QRDisplayDialog(getPaymentUri());
                 addressQrDialog.initOwner(address.getScene().getWindow());
                 addressQrDialog.showAndWait();
                 addressQrDialog = null;
             }
         });
 
+        initializeAmountFields();
+
         refreshAddress();
+    }
+
+    private void initializeAmountFields() {
+        amount.setTextFormatter(new CoinTextFormatter(Config.get().getUnitFormat()));
+        amount.textProperty().addListener((observable, oldValue, newValue) -> {
+            if(!syncingAmounts) {
+                syncingAmounts = true;
+                try {
+                    setFiatFromAmount();
+                } finally {
+                    syncingAmounts = false;
+                }
+            }
+            updateQR();
+        });
+
+        fiatAmount.setTextFormatter(new TextFormatter<>(change -> {
+            //Mirror the LTC field: auto-insert a leading zero when the fiat amount starts with the decimal separator
+            String sep = (Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat()).getDecimalSeparator();
+            if(!change.isDeleted() && change.getControlNewText().startsWith(sep)) {
+                change.setText("0" + change.getText());
+                //Caret after the inserted text - getCaretPosition() can be stale on the field's first edit, dropping the
+                //caret between the "0" and the separator so the next digit lands on the wrong side (".10" became "0.01").
+                int caret = change.getRangeStart() + change.getText().length();
+                change.setCaretPosition(caret);
+                change.setAnchor(caret);
+            }
+            return change;
+        }));
+
+        //Typing a fiat amount fills in the LTC field, which (via the amount listener) refreshes the QR
+        fiatAmount.textProperty().addListener((observable, oldValue, newValue) -> {
+            if(syncingAmounts) {
+                return;
+            }
+            syncingAmounts = true;
+            try {
+                setAmountFromFiat();
+            } finally {
+                syncingAmounts = false;
+            }
+        });
+
+        amountUnit.getSelectionModel().select(BitcoinUnit.BTC.equals(getBitcoinUnit()) ? 0 : 1);
+        amountUnit.valueProperty().addListener((observable, oldValue, newValue) -> {
+            Long value = getRecipientValueSats(oldValue);
+            if(value != null) {
+                UnitFormat unitFormat = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
+                DecimalFormat df = new DecimalFormat("#.#", unitFormat.getDecimalFormatSymbols());
+                df.setMaximumFractionDigits(8);
+                amount.setText(df.format(newValue.getValue(value)));
+            }
+        });
+
+        CurrencyRate currencyRate = AppServices.getFiatCurrencyExchangeRate();
+        boolean fiatAvailable = currencyRate != null && currencyRate.isAvailable() && Config.get().getExchangeSource() != ExchangeSource.NONE;
+        fiatAmount.setDisable(!fiatAvailable);
+        if(fiatAvailable && currencyRate.getCurrency() != null) {
+            fiatCurrencyCode.setText(currencyRate.getCurrency().getSymbol());
+        }
     }
 
     public void setNodeEntry(NodeEntry nodeEntry) {
@@ -109,7 +198,7 @@ public class ReceiveController extends WalletFormController implements Initializ
 
         updateLastUsed();
 
-        Image qrImage = getQrCode(nodeEntry.getAddress().toString());
+        Image qrImage = getQrCode(getPaymentUri());
         if(qrImage != null) {
             qrCode.setImage(qrImage);
         }
@@ -190,6 +279,112 @@ public class ReceiveController extends WalletFormController implements Initializ
         }
 
         return null;
+    }
+
+    private BitcoinUnit getBitcoinUnit() {
+        BitcoinUnit unit = Config.get().getBitcoinUnit();
+        if(unit == null || unit == BitcoinUnit.AUTO) {
+            return BitcoinUnit.BTC;
+        }
+        return unit;
+    }
+
+    private Long getRecipientValueSats() {
+        return getRecipientValueSats(amountUnit.getValue());
+    }
+
+    private Long getRecipientValueSats(BitcoinUnit bitcoinUnit) {
+        return getRecipientValueSats(Config.get().getUnitFormat(), bitcoinUnit);
+    }
+
+    private Long getRecipientValueSats(UnitFormat unitFormat, BitcoinUnit bitcoinUnit) {
+        if(bitcoinUnit != null && amount.getText() != null && !amount.getText().isEmpty()) {
+            UnitFormat format = unitFormat == null ? UnitFormat.DOT : unitFormat;
+            try {
+                double fieldValue = Double.parseDouble(amount.getText().replaceAll(Pattern.quote(format.getGroupingSeparator()), "").replaceAll(",", "."));
+                return bitcoinUnit.getSatsValue(fieldValue);
+            } catch(NumberFormatException e) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private void setFiatFromAmount() {
+        CurrencyRate currencyRate = AppServices.getFiatCurrencyExchangeRate();
+        Long sats = getRecipientValueSats();
+        if(sats != null && sats >= 0 && currencyRate != null && currencyRate.isAvailable() && Config.get().getExchangeSource() != ExchangeSource.NONE) {
+            UnitFormat format = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
+            double fiatValue = BigDecimal.valueOf(sats).divide(BigDecimal.valueOf(Transaction.SATOSHIS_PER_BITCOIN))
+                    .multiply(BigDecimal.valueOf(currencyRate.getBtcRate())).doubleValue();
+            fiatAmount.setText(format.formatCurrencyValue(fiatValue));
+            if(currencyRate.getCurrency() != null) {
+                fiatCurrencyCode.setText(currencyRate.getCurrency().getSymbol());
+            }
+        } else {
+            fiatAmount.setText("");
+        }
+    }
+
+    private void setAmountFromFiat() {
+        Long sats = getFiatValueSats();
+        if(sats == null) {
+            amount.setText("");
+        } else {
+            UnitFormat unitFormat = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
+            DecimalFormat df = new DecimalFormat("#.#", unitFormat.getDecimalFormatSymbols());
+            df.setMaximumFractionDigits(8);
+            amount.setText(df.format(amountUnit.getValue().getValue(sats)));
+        }
+    }
+
+    private Long getFiatValueSats() {
+        CurrencyRate currencyRate = AppServices.getFiatCurrencyExchangeRate();
+        if(fiatAmount.getText() != null && !fiatAmount.getText().isEmpty() && currencyRate != null && currencyRate.isAvailable() && currencyRate.getBtcRate() > 0.0) {
+            UnitFormat format = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
+            try {
+                double fiatValue = Double.parseDouble(fiatAmount.getText().replaceAll(Pattern.quote(format.getGroupingSeparator()), "").replaceAll(",", "."));
+                if(fiatValue <= 0.0) {
+                    return null;
+                }
+                return BigDecimal.valueOf(fiatValue).multiply(BigDecimal.valueOf(Transaction.SATOSHIS_PER_BITCOIN))
+                        .divide(BigDecimal.valueOf(currencyRate.getBtcRate()), 0, RoundingMode.HALF_UP).longValue();
+            } catch(NumberFormatException e) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    //The QR (and enlarged QR dialog) encode a litecoin: BIP21 URI carrying the requested amount when one is entered,
+    //so a scan yields address + amount. With no amount, it falls back to the bare address as before.
+    private String getPaymentUri() {
+        if(currentEntry == null) {
+            return null;
+        }
+
+        String addressString = currentEntry.getAddress().toString();
+        Long sats = getRecipientValueSats();
+        if(sats == null || sats <= 0) {
+            return addressString;
+        }
+
+        BigDecimal ltcValue = BigDecimal.valueOf(sats).divide(BigDecimal.valueOf(Transaction.SATOSHIS_PER_BITCOIN));
+        DecimalFormat df = new DecimalFormat("0.########", DecimalFormatSymbols.getInstance(Locale.ENGLISH));
+        return BitcoinURI.BITCOIN_SCHEME + ":" + addressString + "?" + BitcoinURI.FIELD_AMOUNT + "=" + df.format(ltcValue);
+    }
+
+    private void updateQR() {
+        if(currentEntry == null) {
+            return;
+        }
+
+        Image qrImage = getQrCode(getPaymentUri());
+        if(qrImage != null) {
+            qrCode.setImage(qrImage);
+        }
     }
 
     public void getNewAddress(ActionEvent event) {
@@ -284,6 +479,8 @@ public class ReceiveController extends WalletFormController implements Initializ
 
         address.setText("");
         label.setText("");
+        amount.setText("");
+        fiatAmount.setText("");
         derivationPath.setText("");
         lastUsed.setText("");
         lastUsed.setGraphic(null);
@@ -311,6 +508,56 @@ public class ReceiveController extends WalletFormController implements Initializ
         Glyph duplicateGlyph = new Glyph(FontAwesome5.FONT_NAME, FontAwesome5.Glyph.QUESTION_CIRCLE);
         duplicateGlyph.setFontSize(12);
         return duplicateGlyph;
+    }
+
+    @Subscribe
+    public void unitFormatChanged(UnitFormatChangedEvent event) {
+        if(amount.getTextFormatter() instanceof CoinTextFormatter coinTextFormatter && coinTextFormatter.getUnitFormat() != event.getUnitFormat()) {
+            Long value = getRecipientValueSats(coinTextFormatter.getUnitFormat(), amountUnit.getValue());
+            amount.setTextFormatter(new CoinTextFormatter(event.getUnitFormat()));
+            if(value != null) {
+                syncingAmounts = true;
+                try {
+                    DecimalFormat df = new DecimalFormat("#.#", event.getUnitFormat().getDecimalFormatSymbols());
+                    df.setMaximumFractionDigits(8);
+                    amount.setText(df.format(amountUnit.getValue().getValue(value)));
+                } finally {
+                    syncingAmounts = false;
+                }
+            }
+        }
+    }
+
+    @Subscribe
+    public void exchangeRatesUpdated(ExchangeRatesUpdatedEvent event) {
+        CurrencyRate currencyRate = event.getCurrencyRate();
+        boolean fiatAvailable = currencyRate != null && currencyRate.isAvailable() && Config.get().getExchangeSource() != ExchangeSource.NONE;
+        fiatAmount.setDisable(!fiatAvailable);
+        if(fiatAvailable && currencyRate.getCurrency() != null) {
+            fiatCurrencyCode.setText(currencyRate.getCurrency().getSymbol());
+        }
+        syncingAmounts = true;
+        try {
+            setFiatFromAmount();
+        } finally {
+            syncingAmounts = false;
+        }
+    }
+
+    @Subscribe
+    public void fiatCurrencySelected(FiatCurrencySelectedEvent event) {
+        if(event.getExchangeSource() == ExchangeSource.NONE) {
+            syncingAmounts = true;
+            try {
+                fiatAmount.setText("");
+                fiatCurrencyCode.setText("");
+            } finally {
+                syncingAmounts = false;
+            }
+            fiatAmount.setDisable(true);
+        } else {
+            fiatAmount.setDisable(false);
+        }
     }
 
     @Subscribe

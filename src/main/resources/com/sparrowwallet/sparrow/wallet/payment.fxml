@@ -57,8 +57,14 @@
                         </FXCollections>
                     </items>
                 </ComboBox>
-                <Label style="-fx-pref-width: 15" />
-                <FiatLabel fx:id="fiatAmount" />
+                <Label style="-fx-pref-width: 8" />
+                <Label styleClass="fiat-equals" text="=" />
+                <TextField fx:id="fiatAmount" styleClass="fiat-amount-field" promptText="0.00" prefWidth="90">
+                    <tooltip>
+                        <Tooltip text="Enter an amount in your configured fiat currency; the LTC amount is filled in automatically (and vice versa)"/>
+                    </tooltip>
+                </TextField>
+                <Label fx:id="fiatCurrencyCode" minWidth="32" styleClass="fiat-currency-code" />
                 <Group managed="false" translateY="38">
                     <Label fx:id="amountStatus" text="Insufficient funds">
                         <tooltip>

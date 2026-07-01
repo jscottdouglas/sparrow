@@ -2,6 +2,15 @@
     -fx-padding: 0 0 0 5;
 }
 
+/* Linked LTC <-> fiat amount entry */
+.fiat-equals {
+    -fx-padding: 0 6 0 2;
+}
+
+.fiat-currency-code {
+    -fx-padding: 0 0 0 5;
+}
+
 /* Highlight the Pay to field while a QR code image is dragged over it */
 .address-text-field.drag-over {
     -fx-border-color: -fx-focus-color;

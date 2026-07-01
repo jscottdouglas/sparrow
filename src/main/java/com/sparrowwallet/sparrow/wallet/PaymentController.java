@@ -72,6 +72,8 @@ import org.slf4j.LoggerFactory;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import javax.imageio.ImageIO;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
@@ -107,7 +109,13 @@ public class PaymentController extends WalletFormController implements Initializ
     private ComboBox<BitcoinUnit> amountUnit;
 
     @FXML
-    private FiatLabel fiatAmount;
+    private TextField fiatAmount;
+
+    @FXML
+    private Label fiatCurrencyCode;
+
+    //Guards against the LTC<->fiat amount listeners re-triggering each other while one updates the other
+    private boolean syncingAmounts;
 
     @FXML
     private Label amountStatus;
@@ -146,12 +154,40 @@ public class PaymentController extends WalletFormController implements Initializ
                 dustAmountProperty.set(recipientValueSats < getRecipientDustThreshold());
                 emptyAmountProperty.set(false);
             } else {
-                fiatAmount.setText("");
+                if(!syncingAmounts) {
+                    fiatAmount.setText("");
+                }
                 dustAmountProperty.set(false);
                 emptyAmountProperty.set(true);
             }
 
             sendController.updateTransaction();
+        }
+    };
+
+    //Reverse of amountListener: when the user types a fiat amount, convert it to sats and fill in the LTC field.
+    //Setting the LTC field re-enters amountListener, but syncingAmounts suppresses the fiat write-back so there is no loop.
+    private final ChangeListener<String> fiatAmountListener = new ChangeListener<>() {
+        @Override
+        public void changed(ObservableValue<? extends String> observable, String oldValue, String newValue) {
+            if(syncingAmounts) {
+                return;
+            }
+
+            syncingAmounts = true;
+            try {
+                Long sats = getFiatValueSats();
+                if(sats == null) {
+                    amount.setText("");
+                } else {
+                    UnitFormat unitFormat = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
+                    DecimalFormat df = new DecimalFormat("#.#", unitFormat.getDecimalFormatSymbols());
+                    df.setMaximumFractionDigits(8);
+                    amount.setText(df.format(amountUnit.getValue().getValue(sats)));
+                }
+            } finally {
+                syncingAmounts = false;
+            }
         }
     };
 
@@ -441,6 +477,27 @@ public class PaymentController extends WalletFormController implements Initializ
         amount.setTextFormatter(new CoinTextFormatter(Config.get().getUnitFormat()));
         amount.textProperty().addListener(amountListener);
 
+        fiatAmount.setTextFormatter(new TextFormatter<>(change -> {
+            //Mirror the LTC field: auto-insert a leading zero when the fiat amount starts with the decimal separator
+            String sep = (Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat()).getDecimalSeparator();
+            if(!change.isDeleted() && change.getControlNewText().startsWith(sep)) {
+                change.setText("0" + change.getText());
+                //Caret after the inserted text - getCaretPosition() can be stale on the field's first edit, dropping the
+                //caret between the "0" and the separator so the next digit lands on the wrong side (".10" became "0.01").
+                int caret = change.getRangeStart() + change.getText().length();
+                change.setCaretPosition(caret);
+                change.setAnchor(caret);
+            }
+            return change;
+        }));
+        fiatAmount.textProperty().addListener(fiatAmountListener);
+        CurrencyRate initialRate = AppServices.getFiatCurrencyExchangeRate();
+        boolean fiatAvailable = initialRate != null && initialRate.isAvailable() && Config.get().getExchangeSource() != ExchangeSource.NONE;
+        fiatAmount.setDisable(!fiatAvailable);
+        if(fiatAvailable && initialRate.getCurrency() != null) {
+            fiatCurrencyCode.setText(initialRate.getCurrency().getSymbol());
+        }
+
         amountUnit.getSelectionModel().select(BitcoinUnit.BTC.equals(sendController.getBitcoinUnit(Config.get().getBitcoinUnit())) ? 0 : 1);
         amountUnit.valueProperty().addListener((observable, oldValue, newValue) -> {
             Long value = getRecipientValueSats(oldValue);
@@ -652,10 +709,16 @@ public class PaymentController extends WalletFormController implements Initializ
 
     private void setRecipientValueSats(long recipientValue) {
         amount.textProperty().removeListener(amountListener);
-        UnitFormat unitFormat = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
-        DecimalFormat df = new DecimalFormat("#.#", unitFormat.getDecimalFormatSymbols());
-        df.setMaximumFractionDigits(8);
-        amount.setText(df.format(amountUnit.getValue().getValue(recipientValue)));
+        if(recipientValue <= 0) {
+            //Leave the field empty (its prompt shows) rather than a literal "0" the user must select and clear before
+            //entering an amount - the same reason the fiat field is left empty for a zero amount.
+            amount.setText("");
+        } else {
+            UnitFormat unitFormat = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
+            DecimalFormat df = new DecimalFormat("#.#", unitFormat.getDecimalFormatSymbols());
+            df.setMaximumFractionDigits(8);
+            amount.setText(df.format(amountUnit.getValue().getValue(recipientValue)));
+        }
         amount.textProperty().addListener(amountListener);
     }
 
@@ -675,10 +738,57 @@ public class PaymentController extends WalletFormController implements Initializ
         return address.getScriptType().getDustThreshold(txOutput, Transaction.DUST_RELAY_TX_FEE);
     }
 
-    private void setFiatAmount(CurrencyRate currencyRate, Long amount) {
-        if(amount != null && currencyRate != null && currencyRate.isAvailable()) {
-            fiatAmount.set(currencyRate, amount);
+    private void setFiatAmount(CurrencyRate currencyRate, Long amountSats) {
+        //Skip while the user is editing the fiat field directly, otherwise we would overwrite what they are typing
+        if(syncingAmounts) {
+            return;
         }
+
+        if(currencyRate == null || !currencyRate.isAvailable() || Config.get().getExchangeSource() == ExchangeSource.NONE) {
+            return;
+        }
+
+        syncingAmounts = true;
+        try {
+            if(amountSats != null && amountSats > 0) {
+                UnitFormat format = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
+                fiatAmount.setText(format.formatCurrencyValue(getFiatValue(amountSats, currencyRate)));
+            } else {
+                //No positive amount yet: keep the field empty (its "0.00" prompt still shows) instead of writing a
+                //literal "0.00". Selecting/replacing that pre-filled zero collided with the leading-zero auto-insert
+                //and produced mangled values like ".010"; an empty field lets the user just type the amount.
+                fiatAmount.setText("");
+            }
+            if(currencyRate.getCurrency() != null) {
+                fiatCurrencyCode.setText(currencyRate.getCurrency().getSymbol());
+            }
+        } finally {
+            syncingAmounts = false;
+        }
+    }
+
+    private double getFiatValue(long amountSats, CurrencyRate currencyRate) {
+        return BigDecimal.valueOf(amountSats).divide(BigDecimal.valueOf(Transaction.SATOSHIS_PER_BITCOIN))
+                .multiply(BigDecimal.valueOf(currencyRate.getBtcRate())).doubleValue();
+    }
+
+    private Long getFiatValueSats() {
+        CurrencyRate currencyRate = AppServices.getFiatCurrencyExchangeRate();
+        if(fiatAmount.getText() != null && !fiatAmount.getText().isEmpty() && currencyRate != null && currencyRate.isAvailable() && currencyRate.getBtcRate() > 0.0) {
+            UnitFormat format = Config.get().getUnitFormat() == null ? UnitFormat.DOT : Config.get().getUnitFormat();
+            try {
+                double fiatValue = Double.parseDouble(fiatAmount.getText().replaceAll(Pattern.quote(format.getGroupingSeparator()), "").replaceAll(",", "."));
+                if(fiatValue <= 0.0) {
+                    return null;
+                }
+                return BigDecimal.valueOf(fiatValue).multiply(BigDecimal.valueOf(Transaction.SATOSHIS_PER_BITCOIN))
+                        .divide(BigDecimal.valueOf(currencyRate.getBtcRate()), 0, RoundingMode.HALF_UP).longValue();
+            } catch(NumberFormatException e) {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     public void revalidateAmount() {
@@ -914,6 +1024,7 @@ public class PaymentController extends WalletFormController implements Initializ
         label.setDisable(disable);
         amount.setDisable(disable);
         amountUnit.setDisable(disable);
+        fiatAmount.setDisable(disable || Config.get().getExchangeSource() == ExchangeSource.NONE);
         scanQrButton.setDisable(disable);
         addPaymentButton.setDisable(disable);
         maxButton.setDisable(disable);
@@ -972,20 +1083,40 @@ public class PaymentController extends WalletFormController implements Initializ
                 setRecipientValueSats(value);
             }
         }
-        fiatAmount.refresh(event.getUnitFormat());
+        setFiatAmount(AppServices.getFiatCurrencyExchangeRate(), getRecipientValueSats());
     }
 
     @Subscribe
     public void fiatCurrencySelected(FiatCurrencySelectedEvent event) {
         if(event.getExchangeSource() == ExchangeSource.NONE) {
-            fiatAmount.setCurrency(null);
-            fiatAmount.setBtcRate(0.0);
+            syncingAmounts = true;
+            try {
+                fiatAmount.setText("");
+                fiatCurrencyCode.setText("");
+            } finally {
+                syncingAmounts = false;
+            }
+            fiatAmount.setDisable(true);
+        } else {
+            fiatAmount.setDisable(false);
+            CurrencyRate currencyRate = AppServices.getFiatCurrencyExchangeRate();
+            if(currencyRate != null && currencyRate.getCurrency() != null) {
+                fiatCurrencyCode.setText(currencyRate.getCurrency().getSymbol());
+            }
+            setFiatAmount(currencyRate, getRecipientValueSats());
         }
     }
 
     @Subscribe
     public void exchangeRatesUpdated(ExchangeRatesUpdatedEvent event) {
-        setFiatAmount(event.getCurrencyRate(), getRecipientValueSats());
+        CurrencyRate currencyRate = event.getCurrencyRate();
+        if(currencyRate != null && currencyRate.isAvailable() && Config.get().getExchangeSource() != ExchangeSource.NONE) {
+            fiatAmount.setDisable(false);
+            if(currencyRate.getCurrency() != null) {
+                fiatCurrencyCode.setText(currencyRate.getCurrency().getSymbol());
+            }
+        }
+        setFiatAmount(currencyRate, getRecipientValueSats());
     }
 
     @Subscribe
@@ -995,7 +1126,7 @@ public class PaymentController extends WalletFormController implements Initializ
 
     @Subscribe
     public void hideAmountsStatusChanged(HideAmountsStatusEvent event) {
-        fiatAmount.refresh();
+        setFiatAmount(AppServices.getFiatCurrencyExchangeRate(), getRecipientValueSats());
     }
 
     private static class DnsPaymentService extends Service<Optional<DnsPayment>> {
