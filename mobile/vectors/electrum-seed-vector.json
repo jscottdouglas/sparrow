@@ -1,0 +1,14 @@
+{
+  "description": "Electrum-seed parity vector from drongo. Salt 'electrum', segwit type -> m/0'.",
+  "mnemonic": "coach fan denial rifle frost rival join install one wasp cool antique",
+  "passphrase": "",
+  "seedType": "segwit",
+  "versionHmacPrefix": "100d",
+  "seedBytes": "d5f3bd0ad840c0673cd005b335d281fd45ff3fb36d3d015aa64db5ad44542cdc3a0566f17969020b69ebe2c45836230a9f3eb143061a87c0aedf38d62e517e10",
+  "derivationPath": "m/0'",
+  "extendedMasterPrivateKey": "xprv9s21ZrQH143K2QkTYeeSPf6XbSnqKh6yfGMHwuUQEAS8UQ57tyCeRQAMykGLHoAmoBhr9rrGGdryQWeehgd8tkA17HUtcyQtZ6Lraq2zczB",
+  "accountXpub": "xpub692kg4btf7i3icU2foV8RVrKPzQ7VxCchKejM2qPjxabDpU8abCJ6dUbtXYAxzqqy6PstNJ5Pj5H7muQGgfKu3irGuMZW4AFBhvUaGRnRU6",
+  "mwebScanSecret": "43eb7a9947460d617adc2fc55ffc2b1bcac3e0e75c1d2bfa3870fb7665f4c8c4",
+  "mwebSpendPubKey": "0234a8388b4fbe1bdda5f73989e83b841eb68ac2a155ba6c1fc69c23d2b49e0d08",
+  "receiveAddresses": ["ltc1qgjyyc02hjtdpwmq2qjp7a5t38lsmhlte9tpa3t", "ltc1qgfj7f6htadhmhj4yhsgv47wf0t2htym9aa0jyw", "ltc1qp8cv7dy2kcv4y37mglkntknxvt84yc98tdzdml", "ltc1qvfqne2gwelczwewcd6d8c2uaw47kzq9j6h7gd4", "ltc1qlgpakcr7ty4fr2xw7f7qfq8grhwxfdv52krqre"]
+}
