@@ -149,6 +149,12 @@
                     <SeparatorMenuItem />
                     <MenuItem fx:id="showPayNym" mnemonicParsing="false" text="Show PayNym" onAction="#showPayNym"/>
                     <SeparatorMenuItem />
+                    <Menu fx:id="linkMobile" mnemonicParsing="false" text="Link with Mobile">
+                        <MenuItem fx:id="linkMobilePush" mnemonicParsing="false" text="Push Wallet to Phone…" onAction="#linkMobilePush"/>
+                        <MenuItem mnemonicParsing="false" text="Receive Wallet from Phone…" onAction="#linkMobileReceive"/>
+                        <MenuItem mnemonicParsing="false" text="Sync Labels with Phone…" onAction="#linkMobileLabels"/>
+                    </Menu>
+                    <SeparatorMenuItem />
                     <Menu fx:id="switchServer" text="Switch Server"/>
                     <MenuItem mnemonicParsing="false" text="Verify Download" onAction="#verifyDownload" />
                     <MenuItem styleClass="osxHide,windowsHide" mnemonicParsing="false" text="Install Udev Rules" onAction="#installUdevRules"/>

@@ -31,6 +31,7 @@ import com.sparrowwallet.sparrow.transaction.TransactionView;
 import com.sparrowwallet.sparrow.wallet.Entry;
 import com.sparrowwallet.sparrow.wallet.WalletController;
 import com.sparrowwallet.sparrow.wallet.WalletForm;
+import com.sparrowwallet.sparrow.wallet.WalletLink;
 import de.jangassen.MenuToolkit;
 import javafx.animation.*;
 import javafx.application.Platform;
@@ -976,6 +977,72 @@ public class AppController implements Initializable {
         CheckMenuItem item = (CheckMenuItem)event.getSource();
         Config.get().setHideAmounts(item.isSelected());
         EventManager.get().post(new HideAmountsStatusEvent(item.isSelected()));
+    }
+
+    public void linkMobilePush(ActionEvent event) {
+        WalletForm selectedWalletForm = getSelectedWalletForm();
+        if(selectedWalletForm == null) {
+            showErrorDialog("No wallet selected", "Open and select the wallet to push to your phone first.");
+            return;
+        }
+
+        // pushing always starts from the public side of a linked pair, whichever tab is
+        // selected — the linked private wallet travels with it
+        Wallet pushWallet = selectedWalletForm.getWallet();
+        if(pushWallet.getScriptType() == ScriptType.MWEB) {
+            Wallet publicSide = WalletLink.getPublicWallet(pushWallet);
+            if(publicSide != null) {
+                pushWallet = publicSide;
+            }
+        }
+
+        try {
+            SparrowLinkDialog linkDialog = new SparrowLinkDialog(SparrowLinkDialog.Mode.PUSH, pushWallet);
+            linkDialog.initOwner(rootStack.getScene().getWindow());
+            linkDialog.showAndWait();
+        } catch(java.io.IOException e) {
+            log.error("Could not start Sparrow Link", e);
+            showErrorDialog("Link with Mobile", e.getMessage());
+        }
+    }
+
+    public void linkMobileReceive(ActionEvent event) {
+        try {
+            SparrowLinkDialog linkDialog = new SparrowLinkDialog(SparrowLinkDialog.Mode.RECEIVE, null);
+            linkDialog.initOwner(rootStack.getScene().getWindow());
+            linkDialog.showAndWait();
+        } catch(java.io.IOException e) {
+            log.error("Could not start Sparrow Link", e);
+            showErrorDialog("Link with Mobile", e.getMessage());
+        }
+    }
+
+    public void linkMobileLabels(ActionEvent event) {
+        // sync against every open, unlocked wallet — the phone matches wallets by
+        // master fingerprint, so extra wallets are simply ignored
+        List<WalletForm> allWalletForms = new ArrayList<>();
+        for(Tab tab : tabs.getTabs()) {
+            TabData tabData = (TabData)tab.getUserData();
+            if(tabData instanceof WalletTabData) {
+                TabPane subTabs = (TabPane)tab.getContent();
+                allWalletForms.addAll(subTabs.getTabs().stream().map(subTab -> ((WalletTabData)subTab.getUserData()).getWalletForm())
+                        .filter(walletForm -> walletForm.getWallet().isValid() && !walletForm.isLocked()).collect(Collectors.toList()));
+            }
+        }
+
+        if(allWalletForms.isEmpty()) {
+            showErrorDialog("No wallets", "Open and unlock the wallet(s) to sync labels for first.");
+            return;
+        }
+
+        try {
+            SparrowLinkDialog linkDialog = new SparrowLinkDialog(allWalletForms);
+            linkDialog.initOwner(rootStack.getScene().getWindow());
+            linkDialog.showAndWait();
+        } catch(java.io.IOException e) {
+            log.error("Could not start Sparrow Link", e);
+            showErrorDialog("Link with Mobile", e.getMessage());
+        }
     }
 
     public void useHdCameraResolution(ActionEvent event) {
