@@ -938,8 +938,24 @@ public class AppServices {
         }
     }
 
+    //The MWEB explorer used for confidential MWEB transactions, which standard Litecoin explorers (e.g. litecoinspace.org)
+    //do not index. It is block-oriented and has no per-transaction page, so we deep-link to the containing block when known.
+    public static final String MWEB_EXPLORER_URL = "https://www.mwebexplorer.com";
+
     public static void openBlockExplorer(String txid) {
+        openBlockExplorer(txid, false, 0);
+    }
+
+    public static void openBlockExplorer(String txid, boolean mweb, int blockHeight) {
         if(Config.get().isBlockExplorerDisabled()) {
+            return;
+        }
+
+        if(mweb) {
+            //mwebexplorer.com has no per-transaction page; deep-link to the block containing this MWEB transaction once
+            //it has confirmed (its height is known), otherwise open the explorer's hash search page.
+            String mwebUrl = blockHeight > 0 ? MWEB_EXPLORER_URL + "/blocks/block/" + blockHeight : MWEB_EXPLORER_URL + "/search";
+            AppServices.get().getApplication().getHostServices().showDocument(mwebUrl);
             return;
         }
 

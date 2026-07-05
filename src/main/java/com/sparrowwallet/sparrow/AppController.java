@@ -31,6 +31,7 @@ import com.sparrowwallet.sparrow.transaction.TransactionView;
 import com.sparrowwallet.sparrow.wallet.Entry;
 import com.sparrowwallet.sparrow.wallet.WalletController;
 import com.sparrowwallet.sparrow.wallet.WalletForm;
+import com.sparrowwallet.sparrow.wallet.WalletLink;
 import de.jangassen.MenuToolkit;
 import javafx.animation.*;
 import javafx.application.Platform;
@@ -978,6 +979,72 @@ public class AppController implements Initializable {
         EventManager.get().post(new HideAmountsStatusEvent(item.isSelected()));
     }
 
+    public void linkMobilePush(ActionEvent event) {
+        WalletForm selectedWalletForm = getSelectedWalletForm();
+        if(selectedWalletForm == null) {
+            showErrorDialog("No wallet selected", "Open and select the wallet to push to your phone first.");
+            return;
+        }
+
+        // pushing always starts from the public side of a linked pair, whichever tab is
+        // selected — the linked private wallet travels with it
+        Wallet pushWallet = selectedWalletForm.getWallet();
+        if(pushWallet.getScriptType() == ScriptType.MWEB) {
+            Wallet publicSide = WalletLink.getPublicWallet(pushWallet);
+            if(publicSide != null) {
+                pushWallet = publicSide;
+            }
+        }
+
+        try {
+            SparrowLinkDialog linkDialog = new SparrowLinkDialog(SparrowLinkDialog.Mode.PUSH, pushWallet);
+            linkDialog.initOwner(rootStack.getScene().getWindow());
+            linkDialog.showAndWait();
+        } catch(java.io.IOException e) {
+            log.error("Could not start Sparrow Link", e);
+            showErrorDialog("Link with Mobile", e.getMessage());
+        }
+    }
+
+    public void linkMobileReceive(ActionEvent event) {
+        try {
+            SparrowLinkDialog linkDialog = new SparrowLinkDialog(SparrowLinkDialog.Mode.RECEIVE, null);
+            linkDialog.initOwner(rootStack.getScene().getWindow());
+            linkDialog.showAndWait();
+        } catch(java.io.IOException e) {
+            log.error("Could not start Sparrow Link", e);
+            showErrorDialog("Link with Mobile", e.getMessage());
+        }
+    }
+
+    public void linkMobileLabels(ActionEvent event) {
+        // sync against every open, unlocked wallet — the phone matches wallets by
+        // master fingerprint, so extra wallets are simply ignored
+        List<WalletForm> allWalletForms = new ArrayList<>();
+        for(Tab tab : tabs.getTabs()) {
+            TabData tabData = (TabData)tab.getUserData();
+            if(tabData instanceof WalletTabData) {
+                TabPane subTabs = (TabPane)tab.getContent();
+                allWalletForms.addAll(subTabs.getTabs().stream().map(subTab -> ((WalletTabData)subTab.getUserData()).getWalletForm())
+                        .filter(walletForm -> walletForm.getWallet().isValid() && !walletForm.isLocked()).collect(Collectors.toList()));
+            }
+        }
+
+        if(allWalletForms.isEmpty()) {
+            showErrorDialog("No wallets", "Open and unlock the wallet(s) to sync labels for first.");
+            return;
+        }
+
+        try {
+            SparrowLinkDialog linkDialog = new SparrowLinkDialog(allWalletForms);
+            linkDialog.initOwner(rootStack.getScene().getWindow());
+            linkDialog.showAndWait();
+        } catch(java.io.IOException e) {
+            log.error("Could not start Sparrow Link", e);
+            showErrorDialog("Link with Mobile", e.getMessage());
+        }
+    }
+
     public void useHdCameraResolution(ActionEvent event) {
         CheckMenuItem item = (CheckMenuItem)event.getSource();
         if(Config.get().getWebcamResolution().isStandardAspect() && item.isSelected()) {
@@ -1722,6 +1789,21 @@ public class AppController implements Initializable {
 
     public void addWalletTab(Storage storage, Wallet wallet) {
         if(wallet.isMasterWallet()) {
+            //A separately-seeded MWEB (private) wallet linked to an already-open public wallet is shown as a sub-tab
+            //under that public wallet (in a distinct colour) rather than as its own top-level tab
+            if(isLinkedForeignMweb(wallet, storage)) {
+                Tab publicWalletTab = getWalletTabForId(Config.get().getPublicWalletIdForMwebWalletId(storage.getWalletId(wallet)));
+                if(publicWalletTab != null) {
+                    TabPane publicSubTabs = (TabPane)publicWalletTab.getContent();
+                    subTabsVisible = true;
+                    addWalletSubTab(publicSubTabs, storage, wallet);
+                    setSubTabsVisible(publicSubTabs, true);
+                    tabs.getSelectionModel().select(publicWalletTab);
+                    EventManager.get().post(new WalletOpenedEvent(storage, wallet));
+                    return;
+                }
+            }
+
             String name = storage.getWalletName(wallet);
             if(!name.equals(wallet.getName())) {
                 wallet.setName(name);
@@ -1768,6 +1850,9 @@ public class AppController implements Initializable {
             if(oldWalletFile != null) {
                 deleteStorage(new Storage(oldWalletFile), false);
             }
+
+            //If a separately-seeded MWEB wallet linked to this public wallet is already open as its own tab, nest it here
+            nestLinkedMwebWalletIfOpen(storage, wallet, tab);
         } else {
             for(Tab walletTab : tabs.getTabs()) {
                 TabData tabData = (TabData)walletTab.getUserData();
@@ -1824,8 +1909,8 @@ public class AppController implements Initializable {
             return true;
         }
 
-        for(Wallet wallet : AppServices.get().getOpenWallets().keySet()) {
-            if(wallet.getChildWallets().stream().anyMatch(childWallet -> !childWallet.isNested())) {
+        for(Map.Entry<Wallet, Storage> entry : AppServices.get().getOpenWallets().entrySet()) {
+            if(entry.getKey().getChildWallets().stream().anyMatch(childWallet -> !childWallet.isNested()) || isLinkedForeignMweb(entry.getKey(), entry.getValue())) {
                 subTabsVisible = true;
                 return true;
             }
@@ -1838,6 +1923,9 @@ public class AppController implements Initializable {
         try {
             Tab subTab = new Tab();
             subTab.setClosable(false);
+            if(isLinkedForeignMweb(wallet, storage)) {
+                subTab.getStyleClass().add("linked-seed");
+            }
             String label = wallet.getLabel() != null ? wallet.getLabel() : (wallet.isMasterWallet() ? wallet.getAutomaticName() : wallet.getName());
             Label subTabLabel = new Label(label);
             subTabLabel.setPadding(new Insets(0, 3, 0, 3));
@@ -1866,11 +1954,7 @@ public class AppController implements Initializable {
             }
 
             subTabs.getTabs().add(subTab);
-            subTabs.getTabs().sort((o1, o2) -> {
-                WalletTabData tabData1 = (WalletTabData) o1.getUserData();
-                WalletTabData tabData2 = (WalletTabData) o2.getUserData();
-                return tabData1.getWallet().compareTo(tabData2.getWallet());
-            });
+            sortSubTabs(subTabs);
             subTabs.getSelectionModel().select(subTab);
 
             if(wallet.isValid()) {
@@ -1881,6 +1965,203 @@ public class AppController implements Initializable {
         } catch(IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * Whether the given wallet is a separately-seeded MWEB (private) wallet that is linked to a public wallet - i.e.
+     * its own master wallet carrying ScriptType.MWEB (as opposed to the same-seed MWEB child, which is not a master
+     * wallet) with a configured public-wallet association. Such a wallet is nested as an amber sub-tab under its public
+     * wallet to signal it derives from a different seed.
+     */
+    private boolean isLinkedForeignMweb(Wallet wallet, Storage storage) {
+        return wallet.getScriptType() == ScriptType.MWEB && wallet.isMasterWallet() && storage != null
+                && Config.get().getPublicWalletIdForMwebWalletId(storage.getWalletId(wallet)) != null;
+    }
+
+    private boolean isLinkedForeignMweb(WalletTabData walletTabData) {
+        return isLinkedForeignMweb(walletTabData.getWallet(), walletTabData.getStorage());
+    }
+
+    private void sortSubTabs(TabPane subTabs) {
+        subTabs.getTabs().sort((o1, o2) -> {
+            WalletTabData tabData1 = (WalletTabData)o1.getUserData();
+            WalletTabData tabData2 = (WalletTabData)o2.getUserData();
+            //A separately-seeded linked MWEB wallet always sorts last so it reads as an appended linked wallet
+            boolean foreign1 = isLinkedForeignMweb(tabData1);
+            boolean foreign2 = isLinkedForeignMweb(tabData2);
+            if(foreign1 != foreign2) {
+                return foreign1 ? 1 : -1;
+            }
+            return tabData1.getWallet().compareTo(tabData2.getWallet());
+        });
+    }
+
+    /**
+     * The top-level tab whose sub-tabs contain the open wallet with the given id, or null if no such wallet is open.
+     */
+    private Tab getWalletTabForId(String walletId) {
+        if(walletId == null) {
+            return null;
+        }
+        for(Tab tab : tabs.getTabs()) {
+            if(tab.getUserData() instanceof WalletTabData) {
+                TabPane subTabs = (TabPane)tab.getContent();
+                for(Tab subTab : subTabs.getTabs()) {
+                    WalletTabData walletTabData = (WalletTabData)subTab.getUserData();
+                    if(walletId.equals(walletTabData.getStorage().getWalletId(walletTabData.getWallet()))) {
+                        return tab;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private String getOpenWalletId(Wallet wallet) {
+        for(Tab tab : tabs.getTabs()) {
+            if(tab.getUserData() instanceof WalletTabData) {
+                TabPane subTabs = (TabPane)tab.getContent();
+                for(Tab subTab : subTabs.getTabs()) {
+                    WalletTabData walletTabData = (WalletTabData)subTab.getUserData();
+                    if(walletTabData.getWallet() == wallet) {
+                        return walletTabData.getStorage().getWalletId(wallet);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * If a separately-seeded MWEB wallet linked to the given (just-opened) public wallet is already open as its own
+     * top-level tab, move it under the public wallet's sub-tabs.
+     */
+    private void nestLinkedMwebWalletIfOpen(Storage publicStorage, Wallet publicWallet, Tab publicWalletTab) {
+        if(publicWallet.getScriptType() == ScriptType.MWEB) {
+            return;
+        }
+        Tab mwebWalletTab = getWalletTabForId(Config.get().getLinkedMwebWalletId(publicStorage.getWalletId(publicWallet)));
+        if(mwebWalletTab != null && mwebWalletTab != publicWalletTab) {
+            moveWalletSubTabs(mwebWalletTab, publicWalletTab);
+        }
+    }
+
+    /**
+     * Moves all sub-tabs from a standalone wallet tab into another wallet's sub-tabs, removing the now-empty source
+     * tab. The sub-tabs are detached before the source tab is removed so no WalletTabsClosedEvent fires - the moved
+     * WalletForm(s) and storage stay alive. Used to nest a separately-opened linked MWEB wallet under its public wallet.
+     */
+    private void moveWalletSubTabs(Tab fromTab, Tab toTab) {
+        TabPane fromSubTabs = (TabPane)fromTab.getContent();
+        TabPane toSubTabs = (TabPane)toTab.getContent();
+        List<Tab> movingSubTabs = new ArrayList<>(fromSubTabs.getTabs());
+        fromSubTabs.getTabs().clear();
+        tabs.getTabs().remove(fromTab);
+
+        subTabsVisible = true;
+        Tab lastMoved = null;
+        for(Tab subTab : movingSubTabs) {
+            if(isLinkedForeignMweb((WalletTabData)subTab.getUserData()) && !subTab.getStyleClass().contains("linked-seed")) {
+                subTab.getStyleClass().add("linked-seed");
+            }
+            toSubTabs.getTabs().add(subTab);
+            lastMoved = subTab;
+        }
+        sortSubTabs(toSubTabs);
+        setSubTabsVisible(toSubTabs, true);
+        tabs.getSelectionModel().select(toTab);
+        if(lastMoved != null) {
+            toSubTabs.getSelectionModel().select(lastMoved);
+        }
+    }
+
+    /**
+     * Detaches a sub-tab from a wallet's sub-tabs back into its own top-level tab (mirrors the master branch of
+     * addWalletTab, reusing the existing WalletForm). Used when a linked MWEB wallet is unlinked while both are open.
+     */
+    private void detachSubTabToOwnTab(TabPane fromSubTabs, Tab subTab) {
+        WalletTabData walletTabData = (WalletTabData)subTab.getUserData();
+        Storage storage = walletTabData.getStorage();
+        Wallet wallet = walletTabData.getWallet();
+        WalletForm walletForm = walletTabData.getWalletForm();
+
+        fromSubTabs.getTabs().remove(subTab);
+        subTab.getStyleClass().remove("linked-seed");
+
+        Tab tab = new Tab("");
+        WalletIcon walletIcon = new WalletIcon(storage, wallet);
+        walletIcon.setOpacity(TAB_LABEL_GRAPHIC_OPACITY_ACTIVE);
+        Label tabLabel = new Label(storage.getWalletName(wallet));
+        tabLabel.setGraphic(walletIcon);
+        tabLabel.setGraphicTextGap(5.0);
+        tab.setGraphic(tabLabel);
+        tab.setClosable(true);
+
+        TabPane subTabs = new TabPane();
+        subTabs.setSide(Side.LEFT);
+        subTabs.rotateGraphicProperty().set(true);
+        subTabs.getTabs().add(subTab);
+        setSubTabsVisible(subTabs, areSubTabsVisible());
+        tab.setContent(subTabs);
+        tab.setUserData(new WalletTabData(TabData.TabType.WALLET, walletForm));
+        tab.setContextMenu(getTabContextMenu(tab));
+
+        walletForm.lockedProperty().addListener((observable, oldValue, newValue) -> {
+            setSubTabsVisible(subTabs, !newValue && areSubTabsVisible());
+        });
+        subTabs.getSelectionModel().selectedItemProperty().addListener((observable, old_val, selectedTab) -> {
+            if(selectedTab != null) {
+                EventManager.get().post(new WalletTabSelectedEvent(tab));
+            }
+        });
+        subTabs.getTabs().addListener((ListChangeListener<Tab>) c -> {
+            if(c.next() && (c.wasAdded() || c.wasRemoved())) {
+                EventManager.get().post(new OpenWalletsEvent(tabs.getScene().getWindow(), getOpenWalletTabData()));
+            }
+        });
+
+        tabs.getTabs().add(tab);
+        tabs.getSelectionModel().select(tab);
+    }
+
+    private void reconcileLinkedMwebTab(Wallet eventWallet) {
+        String eventWalletId = getOpenWalletId(eventWallet);
+        if(eventWalletId == null) {
+            return;
+        }
+        String publicWalletId = eventWallet.getScriptType() == ScriptType.MWEB
+                ? Config.get().getPublicWalletIdForMwebWalletId(eventWalletId) : eventWalletId;
+        Tab publicWalletTab = getWalletTabForId(publicWalletId);
+        if(publicWalletTab == null) {
+            return;
+        }
+
+        String linkedMwebId = Config.get().getLinkedMwebWalletId(publicWalletId);
+        if(linkedMwebId != null) {
+            //Newly (or still) linked: nest the MWEB wallet, if open in its own tab, under the public wallet
+            Tab mwebWalletTab = getWalletTabForId(linkedMwebId);
+            if(mwebWalletTab != null && mwebWalletTab != publicWalletTab) {
+                moveWalletSubTabs(mwebWalletTab, publicWalletTab);
+            }
+        } else {
+            //Unlinked: move any nested foreign MWEB sub-tab back out into its own top-level tab
+            TabPane publicSubTabs = (TabPane)publicWalletTab.getContent();
+            List<Tab> nestedForeign = publicSubTabs.getTabs().stream()
+                    .filter(subTab -> ((WalletTabData)subTab.getUserData()).getWallet().getScriptType() == ScriptType.MWEB
+                            && ((WalletTabData)subTab.getUserData()).getWallet().isMasterWallet())
+                    .collect(Collectors.toList());
+            for(Tab subTab : nestedForeign) {
+                detachSubTabToOwnTab(publicSubTabs, subTab);
+            }
+            if(publicSubTabs.getTabs().size() == 1) {
+                setSubTabsVisible(publicSubTabs, areSubTabsVisible());
+            }
+        }
+    }
+
+    @Subscribe
+    public void walletLinkChanged(WalletLinkChangedEvent event) {
+        Platform.runLater(() -> reconcileLinkedMwebTab(event.getWallet()));
     }
 
     private Glyph getSubTabGlyph(Wallet wallet) {

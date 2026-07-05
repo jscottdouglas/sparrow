@@ -19,3 +19,12 @@
 #lastUsedField .input-container, #derivationField .input-container {
     -fx-alignment: center-left;
 }
+
+/* Linked LTC <-> fiat amount entry */
+.fiat-equals {
+    -fx-padding: 0 6 0 2;
+}
+
+.fiat-currency-code {
+    -fx-padding: 0 0 0 5;
+}

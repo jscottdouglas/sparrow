@@ -173,6 +173,14 @@ HorizontalHeaderColumn > TableColumnHeader.column-header.table-column{
     -fx-background-color: #2284bb;
 }
 
+.root .wallet-subtabs > .tab-header-area > .headers-region > .tab.linked-seed {
+    -fx-background-color: derive(#d4901f, 20%);
+}
+
+.root .wallet-subtabs > .tab-header-area > .headers-region > .tab.linked-seed:selected {
+    -fx-background-color: #d4901f;
+}
+
 #inputsPie .default-color0.chart-pie {
     -fx-pie-color: #e06c75;
 }

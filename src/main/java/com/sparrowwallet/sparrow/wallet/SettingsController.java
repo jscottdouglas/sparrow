@@ -97,6 +97,12 @@ public class SettingsController extends WalletFormController implements Initiali
     private Button addAccount;
 
     @FXML
+    private Button enableMweb;
+
+    @FXML
+    private Button linkPrivateWallet;
+
+    @FXML
     private Button apply;
 
     @FXML
@@ -310,6 +316,8 @@ public class SettingsController extends WalletFormController implements Initiali
         scanDescriptorQR.setVisible(!walletForm.getWallet().isValid());
         export.setDisable(!walletForm.getWallet().isValid());
         addAccount.setDisable(!walletForm.getWallet().isValid() || walletForm.getWallet().getScriptType() == ScriptType.P2SH);
+        enableMweb.setDisable(!canEnableMweb(walletForm.getWallet()));
+        linkPrivateWallet.setDisable(!canLinkPrivateWallet(walletForm.getWallet()));
         revert.setDisable(true);
         apply.setDisable(true);
     }
@@ -643,6 +651,180 @@ public class SettingsController extends WalletFormController implements Initiali
         }
     }
 
+    public void enableMweb(ActionEvent event) {
+        Wallet openWallet = AppServices.get().getOpenWallets().entrySet().stream().filter(entry -> walletForm.getWalletFile().equals(entry.getValue().getWalletFile())).map(Map.Entry::getKey).findFirst().orElseThrow();
+        Wallet masterWallet = openWallet.isMasterWallet() ? openWallet : openWallet.getMasterWallet();
+
+        if(masterWallet.getMwebChildWallet() != null) {
+            AppServices.showAlertDialog("MWEB Already Enabled", "This wallet already has an MWEB (private) account.", Alert.AlertType.INFORMATION, ButtonType.OK);
+            return;
+        }
+        if(masterWallet.getPolicyType() != PolicyType.SINGLE || masterWallet.getScriptType() == ScriptType.MWEB
+                || masterWallet.getKeystores().stream().noneMatch(ks -> ks.getSource() == KeystoreSource.SW_SEED)) {
+            AppServices.showAlertDialog("Cannot Enable MWEB", "MWEB requires a single-signature software seed wallet so the MWEB scan and spend keys can be derived from the same seed. Watch-only, hardware and multisig wallets are not supported.", Alert.AlertType.WARNING, ButtonType.OK);
+            return;
+        }
+
+        //Adds a same-seed MWEB (private) child wallet derived from this wallet's seed, mirroring the account-adding flow
+        //(decrypt if needed -> add child -> persist -> re-encrypt). The MWEB child is surfaced as its own wallet tab.
+        if(masterWallet.isEncrypted()) {
+            String walletId = walletForm.getWalletId();
+            WalletPasswordDialog dlg = new WalletPasswordDialog(masterWallet.getName(), WalletPasswordDialog.PasswordRequirement.LOAD);
+            dlg.initOwner(enableMweb.getScene().getWindow());
+            Optional<SecureString> password = dlg.showAndWait();
+            if(password.isPresent()) {
+                Storage.KeyDerivationService keyDerivationService = new Storage.KeyDerivationService(walletForm.getStorage(), password.get(), true);
+                keyDerivationService.setOnSucceeded(workerStateEvent -> {
+                    EventManager.get().post(new StorageEvent(walletId, TimedEvent.Action.END, "Done"));
+                    ECKey encryptionFullKey = keyDerivationService.getValue();
+                    Key key = new Key(encryptionFullKey.getPrivKeyBytes(), walletForm.getStorage().getKeyDeriver().getSalt(), EncryptionType.Deriver.ARGON2);
+                    encryptionFullKey.clear();
+                    masterWallet.decrypt(key);
+                    try {
+                        Wallet childWallet = masterWallet.addMwebChildWallet();
+                        setTransparentLabel(masterWallet);
+                        EventManager.get().post(new ChildWalletsAddedEvent(getWalletForm().getStorage(), masterWallet, childWallet));
+                        childWallet.encrypt(key);
+                        saveChildWallets(masterWallet);
+                    } finally {
+                        masterWallet.encrypt(key);
+                        key.clear();
+                    }
+                    saveMasterLabel(masterWallet);
+                });
+                keyDerivationService.setOnFailed(workerStateEvent -> {
+                    EventManager.get().post(new StorageEvent(walletId, TimedEvent.Action.END, "Failed"));
+                    if(keyDerivationService.getException() instanceof InvalidPasswordException) {
+                        Optional<ButtonType> optResponse = showErrorDialog("Invalid Password", "The wallet password was invalid. Try again?", ButtonType.CANCEL, ButtonType.OK);
+                        if(optResponse.isPresent() && optResponse.get().equals(ButtonType.OK)) {
+                            Platform.runLater(() -> enableMweb(null));
+                        }
+                    } else {
+                        log.error("Error deriving wallet key", keyDerivationService.getException());
+                    }
+                });
+                EventManager.get().post(new StorageEvent(walletId, TimedEvent.Action.START, "Decrypting wallet..."));
+                keyDerivationService.start();
+            }
+        } else {
+            Wallet childWallet = masterWallet.addMwebChildWallet();
+            setTransparentLabel(masterWallet);
+            EventManager.get().post(new ChildWalletsAddedEvent(getWalletForm().getStorage(), masterWallet, childWallet));
+            saveChildWallets(masterWallet);
+            saveMasterLabel(masterWallet);
+        }
+    }
+
+    //Once MWEB is enabled the wallet reads as Public/Private: label the master (transparent) account "Public"
+    //unless the user already set a custom label. setTransparentLabel only mutates in-memory (safe to call while the
+    //wallet is decrypted); saveMasterLabel persists the (non-sensitive) label and must run while the wallet is in
+    //its at-rest (re-encrypted) state so decrypted key material is never written to disk.
+    private void setTransparentLabel(Wallet masterWallet) {
+        if(masterWallet.getLabel() == null || masterWallet.getLabel().isEmpty()) {
+            masterWallet.setLabel("Public");
+        }
+    }
+
+    private void saveMasterLabel(Wallet masterWallet) {
+        Storage storage = AppServices.get().getOpenWallets().get(masterWallet);
+        if(storage != null) {
+            try {
+                storage.saveWallet(masterWallet);
+            } catch(Exception e) {
+                log.error("Error saving wallet label", e);
+            }
+        }
+    }
+
+    private boolean canEnableMweb(Wallet wallet) {
+        Wallet masterWallet = wallet.isMasterWallet() ? wallet : wallet.getMasterWallet();
+        if(!wallet.isValid()
+                || masterWallet.getPolicyType() != PolicyType.SINGLE
+                || masterWallet.getScriptType() == ScriptType.MWEB
+                || masterWallet.getKeystores().stream().noneMatch(ks -> ks.getSource() == KeystoreSource.SW_SEED)) {
+            return false;
+        }
+
+        //A public wallet links to exactly one MWEB counterpart, so don't offer to enable MWEB once one exists -
+        //whether a same-seed child (getMwebChildWallet) or a separately-seeded wallet associated via Link Private
+        //Wallet (WalletLink.isLinked). The settings form edits a detached copy whose wallet id cannot be resolved
+        //(so the stored pairing is invisible) and whose child-wallet list may be stale, so check the real open
+        //wallet when available, mirroring how linkPrivateWallet resolves it.
+        Wallet linkCheckWallet = getOpenMasterWallet();
+        if(linkCheckWallet == null) {
+            linkCheckWallet = masterWallet;
+        }
+        return linkCheckWallet.getMwebChildWallet() == null && !WalletLink.isLinked(linkCheckWallet);
+    }
+
+    //Resolves the real open master wallet backing this settings form (which otherwise edits a detached copy whose
+    //wallet id - and therefore its stored MWEB pairing - cannot be looked up). Returns null if not currently open.
+    private Wallet getOpenMasterWallet() {
+        return AppServices.get().getOpenWallets().entrySet().stream()
+                .filter(entry -> walletForm.getWalletFile().equals(entry.getValue().getWalletFile()))
+                .map(Map.Entry::getKey)
+                .map(openWallet -> openWallet.isMasterWallet() ? openWallet : openWallet.getMasterWallet())
+                .findFirst().orElse(null);
+    }
+
+    //Linking is configured from the public (transparent) single-sig side; the chosen MWEB wallet may be this
+    //wallet's same-seed child or a separate wallet. The pairing is stored in app config (no key material crosses).
+    private boolean canLinkPrivateWallet(Wallet wallet) {
+        Wallet masterWallet = wallet.isMasterWallet() ? wallet : wallet.getMasterWallet();
+        return wallet.isValid()
+                && masterWallet.getPolicyType() == PolicyType.SINGLE
+                && masterWallet.getScriptType() != ScriptType.MWEB;
+    }
+
+    public void linkPrivateWallet(ActionEvent event) {
+        //The settings form edits a copy of the wallet; resolve the actual open wallet so its id (and the
+        //pairing) can be persisted, mirroring enableMweb.
+        Wallet openWallet = AppServices.get().getOpenWallets().entrySet().stream().filter(entry -> walletForm.getWalletFile().equals(entry.getValue().getWalletFile())).map(Map.Entry::getKey).findFirst().orElseThrow();
+        Wallet masterWallet = openWallet.isMasterWallet() ? openWallet : openWallet.getMasterWallet();
+
+        List<Wallet> candidates = WalletLink.getCandidateMwebWallets(masterWallet);
+        if(candidates.isEmpty()) {
+            AppServices.showAlertDialog("No Private Wallets Open", "Open an MWEB (private) wallet first - either use Enable MWEB on this wallet, or open a separate MWEB wallet - then you can associate it here.", Alert.AlertType.INFORMATION, ButtonType.OK);
+            return;
+        }
+
+        String none = "None (not linked)";
+        LinkedHashMap<String, Wallet> options = new LinkedHashMap<>();
+        options.put(none, null);
+        for(Wallet candidate : candidates) {
+            String label = candidate.getFullDisplayName();
+            if(WalletLink.isSameSeed(masterWallet, candidate)) {
+                label += " (same seed)";
+            }
+            options.put(label, candidate);
+        }
+
+        String currentLinkedId = WalletLink.getLinkedCounterpartId(masterWallet);
+        String selected = none;
+        for(Map.Entry<String, Wallet> entry : options.entrySet()) {
+            if(entry.getValue() != null && Objects.equals(WalletLink.getWalletId(entry.getValue()), currentLinkedId)) {
+                selected = entry.getKey();
+            }
+        }
+
+        ChoiceDialog<String> dialog = new ChoiceDialog<>(selected, new ArrayList<>(options.keySet()));
+        dialog.setTitle("Link Private Wallet");
+        dialog.setHeaderText("Associate a private (MWEB) wallet with this public wallet to show a combined balance and one-click Move to Public / Move to Private buttons.\n\nBoth wallets must be open for the combined balance and peg-out to work.");
+        dialog.setContentText("Private wallet:");
+        dialog.initOwner(linkPrivateWallet.getScene().getWindow());
+
+        Optional<String> result = dialog.showAndWait();
+        if(result.isPresent()) {
+            Wallet chosen = options.get(result.get());
+            if(chosen == null) {
+                WalletLink.unlink(masterWallet);
+            } else {
+                WalletLink.link(masterWallet, chosen);
+            }
+            EventManager.get().post(new WalletLinkChangedEvent(masterWallet));
+        }
+    }
+
     private void addAccounts(Wallet masterWallet, List<StandardAccount> standardAccounts, boolean discoverAccounts) {
         if(masterWallet.getKeystores().stream().anyMatch(ks -> ks.getSource() == KeystoreSource.SW_SEED)) {
             if(masterWallet.isEncrypted()) {
@@ -841,6 +1023,8 @@ public class SettingsController extends WalletFormController implements Initiali
             apply.setDisable(!wallet.isValid());
             export.setDisable(true);
             addAccount.setDisable(true);
+            enableMweb.setDisable(true);
+            linkPrivateWallet.setDisable(true);
             scanDescriptorQR.setVisible(!wallet.isValid());
         }
     }
@@ -850,8 +1034,18 @@ public class SettingsController extends WalletFormController implements Initiali
         if(event.getWalletId().equals(walletForm.getWalletId())) {
             export.setDisable(!event.getWallet().isValid());
             addAccount.setDisable(!event.getWallet().isValid() || event.getWallet().getScriptType() == ScriptType.P2SH);
+            enableMweb.setDisable(!canEnableMweb(event.getWallet()));
+            linkPrivateWallet.setDisable(!canLinkPrivateWallet(event.getWallet()));
             scanDescriptorQR.setVisible(!event.getWallet().isValid());
         }
+    }
+
+    @Subscribe
+    public void walletLinkChanged(WalletLinkChangedEvent event) {
+        //A public/private pairing was created or removed - re-evaluate whether Enable MWEB should still be offered
+        //(it must not be once this wallet already has an MWEB counterpart).
+        enableMweb.setDisable(!canEnableMweb(walletForm.getWallet()));
+        linkPrivateWallet.setDisable(!canLinkPrivateWallet(walletForm.getWallet()));
     }
 
     @Subscribe

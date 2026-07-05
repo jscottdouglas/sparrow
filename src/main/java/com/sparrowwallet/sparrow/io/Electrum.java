@@ -188,6 +188,30 @@ public class Electrum implements KeystoreFileImport, WalletImport, WalletExport 
 
                 keystore.setKeyDerivation(new KeyDerivation(masterFingerprint, derivationPath, true));
                 keystore.setExtendedPublicKey(xPub);
+                //Populate the keystore's MWEB keys. Every Sparrow-LTC software keystore is expected to carry them
+                //(signing always routes through the MWEB server).
+                if(keystore.getSeed() != null) {
+                    //A seed is authoritative: derive the MWEB scan secret + spend public key from it (at <derivation>/0'
+                    //and <derivation>/1', the same recipe used for natively created wallets) so the imported wallet's MWEB
+                    //addresses are always bound to its own seed. Any MWEB key material the file also carries is
+                    //deliberately not trusted here - this prevents rebinding the wallet's MWEB addresses to
+                    //externally-supplied values and avoids ever reading the scan secret (a private key) as plaintext.
+                    ExtendedKey masterPrivateKey = keystore.getExtendedMasterPrivateKey();
+                    List<ChildNumber> scanDerivation = new ArrayList<>(KeyDerivation.parsePath(derivationPath));
+                    scanDerivation.add(new ChildNumber(0, true));
+                    keystore.setMwebScanPrivateKey(masterPrivateKey.getKey(scanDerivation));
+                    List<ChildNumber> spendDerivation = new ArrayList<>(KeyDerivation.parsePath(derivationPath));
+                    spendDerivation.add(new ChildNumber(1, true));
+                    keystore.setMwebSpendPublicKey(masterPrivateKey.getKey(spendDerivation).dropPrivateBytes().dropParent());
+                } else if(ek.mweb_scan_secret != null && ek.mweb_spend_pubkey != null) {
+                    //Watch-only / view-key-only import: with no seed to derive from, the file's MWEB view keys are the
+                    //only source. The scan secret is a private key, so decrypt it with the wallet password exactly as the
+                    //seed and passphrase are decrypted above - it must never be read as plaintext from an encrypted wallet
+                    //file. The spend public key is not secret and is read as-is.
+                    String scanSecret = password != null ? decrypt(ek.mweb_scan_secret, password) : ek.mweb_scan_secret;
+                    keystore.setMwebScanPrivateKey(ECKey.fromPrivate(Utils.hexToBytes(scanSecret)));
+                    keystore.setMwebSpendPublicKey(ECKey.fromPublicOnly(Utils.hexToBytes(ek.mweb_spend_pubkey)));
+                }
                 keystore.setLabel(ek.label != null ? ek.label : "Electrum");
                 if(keystore.getLabel().length() > Keystore.MAX_LABEL_LENGTH) {
                     keystore.setLabel(keystore.getLabel().substring(0, Keystore.MAX_LABEL_LENGTH));
@@ -477,6 +501,9 @@ public class Electrum implements KeystoreFileImport, WalletImport, WalletExport 
         public String seed;
         public String passphrase;
         public Integer pw_hash_version;
+        //MWEB view keys present on an Electrum-LTC MWEB keystore (hex-encoded scan secret and spend public key)
+        public String mweb_scan_secret;
+        public String mweb_spend_pubkey;
     }
 
     public static class ElectrumAddresses {

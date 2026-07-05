@@ -614,7 +614,11 @@ public class EntryCell extends TreeTableCell<Entry, Entry> implements Confirmati
                 MenuItem openBlockExplorer = new MenuItem("Open in Block Explorer");
                 openBlockExplorer.setOnAction(AE -> {
                     hide();
-                    AppServices.openBlockExplorer(blockTransaction.getHashAsString());
+                    //Confidential MWEB transactions are not indexed by standard Litecoin explorers, so route them to the
+                    //MWEB explorer (by containing block); canonical txs, incl. peg-ins/peg-outs, use the configured explorer.
+                    AppServices.openBlockExplorer(blockTransaction.getHashAsString(),
+                            blockTransaction.getTransaction() != null && blockTransaction.getTransaction().isMweb(),
+                            blockTransaction.getHeight());
                 });
                 getItems().add(openBlockExplorer);
             }
@@ -645,7 +649,11 @@ public class EntryCell extends TreeTableCell<Entry, Entry> implements Confirmati
                 MenuItem openBlockExplorer = new MenuItem("Open in Block Explorer");
                 openBlockExplorer.setOnAction(AE -> {
                     hide();
-                    AppServices.openBlockExplorer(blockTransaction.getHashAsString());
+                    //Confidential MWEB transactions are not indexed by standard Litecoin explorers, so route them to the
+                    //MWEB explorer (by containing block); canonical txs, incl. peg-ins/peg-outs, use the configured explorer.
+                    AppServices.openBlockExplorer(blockTransaction.getHashAsString(),
+                            blockTransaction.getTransaction() != null && blockTransaction.getTransaction().isMweb(),
+                            blockTransaction.getHeight());
                 });
                 getItems().add(openBlockExplorer);
             }

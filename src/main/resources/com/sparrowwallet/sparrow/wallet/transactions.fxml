@@ -34,11 +34,26 @@
                 </rowConstraints>
                 <Form GridPane.columnIndex="0" GridPane.rowIndex="0">
                     <Fieldset inputGrow="SOMETIMES" text="Transactions" styleClass="header">
-                        <Field text="Balance:">
+                        <Field fx:id="balanceField" text="Balance:">
                             <CopyableCoinLabel fx:id="balance"/><Region HBox.hgrow="ALWAYS"/><FiatLabel fx:id="fiatBalance" minWidth="110" />
                         </Field>
-                        <Field text="Mempool:">
+                        <Field fx:id="publicBalanceField" text="Public:" managed="false" visible="false">
+                            <CopyableCoinLabel fx:id="publicBalance" /><Region HBox.hgrow="ALWAYS"/><FiatLabel fx:id="fiatPublicBalance" minWidth="110" />
+                        </Field>
+                        <Field fx:id="privateBalanceField" text="Private:" managed="false" visible="false">
+                            <CopyableCoinLabel fx:id="privateBalance" /><Region HBox.hgrow="ALWAYS"/><FiatLabel fx:id="fiatPrivateBalance" minWidth="110" />
+                        </Field>
+                        <Field fx:id="combinedBalanceField" text="Total:" managed="false" visible="false">
+                            <CopyableCoinLabel fx:id="combinedBalance" /><Region HBox.hgrow="ALWAYS"/><FiatLabel fx:id="fiatCombinedBalance" minWidth="110" />
+                        </Field>
+                        <Field fx:id="mempoolBalanceField" text="Mempool:">
                             <CopyableCoinLabel fx:id="mempoolBalance" /><Region HBox.hgrow="ALWAYS"/><FiatLabel fx:id="fiatMempoolBalance" minWidth="110" />
+                        </Field>
+                        <Field fx:id="publicMempoolField" text="Public Pending:" managed="false" visible="false">
+                            <CopyableCoinLabel fx:id="publicMempoolBalance" /><Region HBox.hgrow="ALWAYS"/><FiatLabel fx:id="fiatPublicMempoolBalance" minWidth="110" />
+                        </Field>
+                        <Field fx:id="privateMempoolField" text="Private Pending:" managed="false" visible="false">
+                            <CopyableCoinLabel fx:id="privateMempoolBalance" /><Region HBox.hgrow="ALWAYS"/><FiatLabel fx:id="fiatPrivateMempoolBalance" minWidth="110" />
                         </Field>
                         <Field text="Transactions:">
                             <CopyableLabel fx:id="transactionCount" />
@@ -50,6 +65,21 @@
                                     <Tooltip text="Export transactions as CSV" />
                                 </tooltip>
                             </Button>
+                        </Field>
+                        <Field fx:id="moveFundsField" text="Move:" managed="false" visible="false">
+                            <Button fx:id="moveToPrivate" text="Move to Private..." onAction="#moveToPrivate">
+                                <tooltip>
+                                    <Tooltip text="Peg-in: spend public (transparent) funds to a fresh private MWEB address." />
+                                </tooltip>
+                            </Button>
+                            <Button fx:id="moveToPublic" text="Move to Public..." onAction="#moveToPublic">
+                                <tooltip>
+                                    <Tooltip text="Peg-out: spend private (MWEB) funds to a fresh public address." />
+                                </tooltip>
+                            </Button>
+                        </Field>
+                        <Field fx:id="linkNoticeField" managed="false" visible="false">
+                            <Label fx:id="linkNotice" wrapText="true" maxWidth="340" />
                         </Field>
                     </Fieldset>
                 </Form>

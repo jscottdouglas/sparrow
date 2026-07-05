@@ -64,6 +64,16 @@
     -fx-background-color: #3da0e3;
 }
 
+/* A linked MWEB (private) wallet derived from a different seed is shown in amber to set it apart from same-seed sub-tabs */
+.wallet-subtabs > .tab-header-area .tab.linked-seed {
+    -fx-background-color: #e3a23d;
+    -fx-background-insets: 0 1 0 1,0,0;
+}
+
+.wallet-subtabs > .tab-header-area .tab.linked-seed:selected {
+    -fx-background-color: #d4901f;
+}
+
 .wallet-subtabs > .tab-header-area .tab-label {
     -fx-pref-height: 50;
     -fx-pref-width: 90;

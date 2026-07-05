@@ -124,6 +124,8 @@
             <HBox AnchorPane.leftAnchor="0" spacing="20">
                 <Button fx:id="export" text="Export..." onAction="#exportWallet" />
                 <Button fx:id="addAccount" text="Add Account..." onAction="#addAccount" />
+                <Button fx:id="enableMweb" text="Enable MWEB..." onAction="#enableMweb" />
+                <Button fx:id="linkPrivateWallet" text="Link Private Wallet..." onAction="#linkPrivateWallet" />
             </HBox>
             <HBox AnchorPane.rightAnchor="10" spacing="20">
                 <Button text="Advanced..." onAction="#showAdvanced" />

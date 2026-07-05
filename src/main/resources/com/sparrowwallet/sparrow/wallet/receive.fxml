@@ -7,6 +7,8 @@
 <?import javafx.scene.layout.*?>
 
 <?import javafx.geometry.Insets?>
+<?import javafx.collections.FXCollections?>
+<?import com.sparrowwallet.drongo.BitcoinUnit?>
 <?import tornadofx.control.Form?>
 <?import tornadofx.control.Fieldset?>
 <?import tornadofx.control.Field?>
@@ -39,6 +41,25 @@
                     </Field>
                     <Field text="Label:">
                         <TextField fx:id="label" />
+                    </Field>
+                    <Field text="Amount:">
+                        <TextField fx:id="amount" styleClass="amount-field" promptText="Optional - request a specific amount">
+                            <tooltip>
+                                <Tooltip text="Optionally request a specific amount. When set, the QR code and copied text become a litecoin: payment URI carrying the amount and address."/>
+                            </tooltip>
+                        </TextField>
+                        <ComboBox fx:id="amountUnit" styleClass="amount-unit">
+                            <items>
+                                <FXCollections fx:factory="observableArrayList">
+                                    <BitcoinUnit fx:constant="BTC" />
+                                    <BitcoinUnit fx:constant="SATOSHIS" />
+                                </FXCollections>
+                            </items>
+                        </ComboBox>
+                        <Label style="-fx-pref-width: 8" />
+                        <Label styleClass="fiat-equals" text="=" />
+                        <TextField fx:id="fiatAmount" styleClass="fiat-amount-field" promptText="0.00" prefWidth="90" />
+                        <Label fx:id="fiatCurrencyCode" minWidth="32" styleClass="fiat-currency-code" />
                     </Field>
                     <Field fx:id="derivationField" text="Derivation:">
                         <CopyableLabel fx:id="derivationPath" />

@@ -66,6 +66,9 @@ public class KeystoreController extends WalletFormController implements Initiali
     private Button viewKeyButton;
 
     @FXML
+    private Button mwebKeysButton;
+
+    @FXML
     private ToggleGroup cardServiceToggleGroup;
 
     @FXML
@@ -141,6 +144,7 @@ public class KeystoreController extends WalletFormController implements Initiali
         exportButton.managedProperty().bind(exportButton.visibleProperty());
         viewSeedButton.managedProperty().bind(viewSeedButton.visibleProperty());
         viewKeyButton.managedProperty().bind(viewKeyButton.visibleProperty());
+        mwebKeysButton.managedProperty().bind(mwebKeysButton.visibleProperty());
         cardServiceButtons.managedProperty().bind(cardServiceButtons.visibleProperty());
         scanXpubQR.managedProperty().bind(scanXpubQR.visibleProperty());
         displayXpubQR.managedProperty().bind(displayXpubQR.visibleProperty());
@@ -308,6 +312,8 @@ public class KeystoreController extends WalletFormController implements Initiali
         exportButton.setVisible(showExport && getWalletForm().getWallet().getPolicyType() == PolicyType.MULTI);
         viewSeedButton.setVisible(keystore.getSource() == KeystoreSource.SW_SEED && keystore.hasSeed());
         viewKeyButton.setVisible(keystore.getSource() == KeystoreSource.SW_SEED && keystore.hasMasterPrivateExtendedKey());
+        mwebKeysButton.setVisible(getWalletForm().getWallet().getScriptType() == ScriptType.MWEB
+                && keystore.getMwebScanPrivateKey() != null && keystore.getMwebSpendPublicKey() != null);
         cardServiceButtons.setVisible(keystore.getWalletModel().isCard());
         backupButton.setDisable(!keystore.getWalletModel().supportsBackup());
 
@@ -426,6 +432,56 @@ public class KeystoreController extends WalletFormController implements Initiali
         KeystoreExportDialog keystoreExportDialog = new KeystoreExportDialog(keystore);
         keystoreExportDialog.initOwner(exportButton.getScene().getWindow());
         keystoreExportDialog.showAndWait();
+    }
+
+    public void showMwebKeys(ActionEvent event) {
+        if(keystore.getMwebScanPrivateKey() == null || keystore.getMwebSpendPublicKey() == null) {
+            return;
+        }
+
+        //The MWEB scan secret is a private key but is not itself stored encrypted, so it is available on the live
+        //keystore once the wallet is open. Gate its reveal on the wallet (file) password where one is set - this also
+        //covers watch-only/view-key-only wallets, where the keystore has no encrypted seed to validate against.
+        Storage storage = getWalletForm().getStorage();
+        if(!Storage.NO_PASSWORD_KEY.equals(storage.getEncryptionPubKey())) {
+            String walletId = getWalletForm().getWalletId();
+            WalletPasswordDialog dlg = new WalletPasswordDialog(getWalletForm().getWallet().getMasterName(), WalletPasswordDialog.PasswordRequirement.LOAD);
+            dlg.initOwner(mwebKeysButton.getScene().getWindow());
+            Optional<SecureString> password = dlg.showAndWait();
+            if(password.isPresent()) {
+                Storage.KeyDerivationService keyDerivationService = new Storage.KeyDerivationService(storage, password.get(), true);
+                keyDerivationService.setOnSucceeded(workerStateEvent -> {
+                    EventManager.get().post(new StorageEvent(walletId, TimedEvent.Action.END, "Done"));
+                    var encryptionFullKey = keyDerivationService.getValue();
+                    if(encryptionFullKey != null) {
+                        encryptionFullKey.clear();
+                    }
+                    showMwebKeys(keystore);
+                });
+                keyDerivationService.setOnFailed(workerStateEvent -> {
+                    EventManager.get().post(new StorageEvent(walletId, TimedEvent.Action.END, "Failed"));
+                    AppServices.showErrorDialog("Incorrect Password", keyDerivationService.getException().getMessage());
+                });
+                EventManager.get().post(new StorageEvent(walletId, TimedEvent.Action.START, "Verifying password..."));
+                keyDerivationService.start();
+            }
+        } else {
+            //No wallet password is set, so there is no password to validate. Require explicit confirmation before
+            //revealing a private key that exposes all MWEB transactions for this wallet.
+            Optional<ButtonType> optType = AppServices.showWarningDialog("Reveal MWEB View Keys?",
+                    "The scan secret shown here is a private key. Anyone with it (and the spend public key) can see all of " +
+                    "this wallet's MWEB transactions and balances, although they cannot spend. Be careful before displaying, " +
+                    "copying, or recording it.\n\nAre you sure you want to continue?", ButtonType.NO, ButtonType.YES);
+            if(optType.isPresent() && optType.get() == ButtonType.YES) {
+                showMwebKeys(keystore);
+            }
+        }
+    }
+
+    private void showMwebKeys(Keystore keystore) {
+        MwebViewKeyDisplayDialog mwebViewKeyDisplayDialog = new MwebViewKeyDisplayDialog(keystore);
+        mwebViewKeyDisplayDialog.initOwner(mwebKeysButton.getScene().getWindow());
+        mwebViewKeyDisplayDialog.showAndWait();
     }
 
     public void showPrivate(ActionEvent event) {

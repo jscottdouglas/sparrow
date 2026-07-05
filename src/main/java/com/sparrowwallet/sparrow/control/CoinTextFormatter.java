@@ -43,6 +43,19 @@ public class CoinTextFormatter extends TextFormatter<String> {
                 deleted = oldText.substring(change.getRangeStart(), change.getRangeEnd());
             }
 
+            //Auto-insert a leading zero when the user starts the amount with the decimal separator (e.g. ".5" -> "0.5").
+            //Without this the bare separator fails to parse below and the keystroke would simply be rejected.
+            if(!change.isDeleted() && !newText.isEmpty() && newText.startsWith(unitFormat.getDecimalSeparator())) {
+                change.setText("0" + change.getText());
+                //Place the caret deterministically after the inserted text. change.getCaretPosition() can be stale on a
+                //field's first edit (reads 0), which dropped the caret between the inserted "0" and the separator and
+                //sent the next digit to the wrong side (".10" became "0.01"); rangeStart + inserted length is always right.
+                int zeroCaret = change.getRangeStart() + change.getText().length();
+                change.setCaretPosition(zeroCaret);
+                change.setAnchor(zeroCaret);
+                newText = change.getControlNewText();
+            }
+
             String noFractionCommaText = newText;
             int commasRemoved = 0;
             int dotIndex = newText.indexOf(unitFormat.getDecimalSeparator());

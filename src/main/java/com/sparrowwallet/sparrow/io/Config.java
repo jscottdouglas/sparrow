@@ -90,6 +90,7 @@ public class Config {
     private int maxServerTimeout = DEFAULT_MAX_TIMEOUT;
     private int maxPageSize = DEFAULT_PAGE_SIZE;
     private boolean usePayNym;
+    private Map<String, String> linkedMwebWallets;
     private boolean mempoolFullRbf;
     private double minRelayFeeRate = Transaction.DEFAULT_MIN_RELAY_FEE;
     private Double appWidth;
@@ -760,6 +761,40 @@ public class Config {
     public void setUsePayNym(boolean usePayNym) {
         this.usePayNym = usePayNym;
         flush();
+    }
+
+    public String getLinkedMwebWalletId(String publicWalletId) {
+        return linkedMwebWallets == null ? null : linkedMwebWallets.get(publicWalletId);
+    }
+
+    public String getPublicWalletIdForMwebWalletId(String mwebWalletId) {
+        if(linkedMwebWallets != null) {
+            for(Map.Entry<String, String> entry : linkedMwebWallets.entrySet()) {
+                if(entry.getValue().equals(mwebWalletId)) {
+                    return entry.getKey();
+                }
+            }
+        }
+        return null;
+    }
+
+    public void setLinkedMwebWallet(String publicWalletId, String mwebWalletId) {
+        if(linkedMwebWallets == null) {
+            linkedMwebWallets = new HashMap<>();
+        }
+        //A public wallet links to exactly one MWEB wallet and vice versa - drop any prior pairing on either side
+        linkedMwebWallets.values().removeIf(mwebWalletId::equals);
+        linkedMwebWallets.remove(publicWalletId);
+        if(mwebWalletId != null) {
+            linkedMwebWallets.put(publicWalletId, mwebWalletId);
+        }
+        flush();
+    }
+
+    public void removeLinkedMwebWallet(String publicWalletId) {
+        if(linkedMwebWallets != null && linkedMwebWallets.remove(publicWalletId) != null) {
+            flush();
+        }
     }
 
     public boolean isMempoolFullRbf() {
