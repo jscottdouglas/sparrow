@@ -1,0 +1,22 @@
+{
+  "description": "Signed P2WPKH parity vector from drongo. Deterministic via RFC6979.",
+  "mnemonic": "absent essay fox snake vast pumpkin height crouch silent bulb excuse razor",
+  "passphrase": "",
+  "keyPath": "m/84'/2'/0'/0/0",
+  "signingPubKey": "03671f0d58e210fe5ca61e8510796c93c88557f8de4498dde477623ac1c8f1584d",
+  "input": {
+    "prevTxid": "3a1b3d8ffab42b283b4f9e5a4bd7418d3f95b2ce7dbf9c4fce1baed3f9c02a7e",
+    "vout": 1,
+    "value": 100000,
+    "sequence": 4294967293
+  },
+  "outputs": [
+    {"value": 90000, "script": "00149c31465aa5711fdbcf57e6236e4e2786de33df50"},
+    {"value": 9000, "script": "00146ad5d112e8c84e793eb487252c64e9383ece21f8"}
+  ],
+  "scriptCode": "76a914df867bec249496cfc75461956930d73380fa6ead88ac",
+  "sighash": "9e0907e19e6908b268bdfefdd4abc35cae3a60fde283a156d359af8934edd44f",
+  "signatureDer": "3044022038d4dd264e84f4aaa618fcc11744105ea55b08fb8c538281947ba8b3f40101b9022079bda0a22aa6ba6ce5b8859013bd0acb39ed5f10c746892109d4b5177e4a815101",
+  "rawTx": "020000000001017e2ac0f9d3ae1bce4f9cbf7dceb2953f8d41d74b5a9e4f3b282bb4fa8f3d1b3a0100000000fdffffff02905f0100000000001600149c31465aa5711fdbcf57e6236e4e2786de33df5028230000000000001600146ad5d112e8c84e793eb487252c64e9383ece21f802473044022038d4dd264e84f4aaa618fcc11744105ea55b08fb8c538281947ba8b3f40101b9022079bda0a22aa6ba6ce5b8859013bd0acb39ed5f10c746892109d4b5177e4a8151012103671f0d58e210fe5ca61e8510796c93c88557f8de4498dde477623ac1c8f1584d00000000",
+  "txid": "e37bcc4113ff246c2c59463caaf01e57e3cbac5be975d6d03d2b69cb4b5bbb45"
+}

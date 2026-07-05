@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Litecoin brand blue behind the silver sparrow -->
+    <color name="ic_launcher_background">#345D9D</color>
+</resources>
